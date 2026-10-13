@@ -197,3 +197,18 @@ def test_run_session_profile_is_immutable(client):
     response = client.patch(f"/api/sessions/{session_id}", json={"user_profile_id": None})
 
     assert response.status_code == 409
+
+
+def test_patch_about_saves_a_new_version(client):
+    created = client.post("/api/user-profiles", json=profile(about="старое")).json()
+    edited = client.patch(
+        f"/api/user-profiles/{created['id']}/about", json={"about": "новое"}
+    )
+    assert edited.status_code == 200
+    assert edited.json()["profile"]["about"] == "новое"
+    assert edited.json()["version_hash"] != created["version_hash"]
+    # The old version is untouched: ledger rows written under it still resolve.
+    conn = client.app.state.db
+    assert repo.get_user_profile_version(conn, created["version_hash"]).about == "старое"
+    missing = client.patch("/api/user-profiles/nope/about", json={"about": "x"})
+    assert missing.status_code == 404
