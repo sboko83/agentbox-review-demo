@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import sqlite3
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from agentbox.core.user_profile import UserProfile
 from agentbox.store import repository as repo
@@ -76,23 +75,19 @@ def update_user_profile(profile_id: str, body: UserProfile, request: Request) ->
 
 @router.patch("/{profile_id}/about")
 def patch_user_profile_about(profile_id: str, body: AboutPatch, request: Request) -> dict:
-    """Quick edit of `about` only, without creating a new profile version."""
+    """Edit `about` only: like PUT, it saves a new immutable version and moves the pointer."""
     conn = request.app.state.db
-    row = conn.execute(
-        "SELECT version_hash FROM user_profiles WHERE id = ?", (profile_id,)
-    ).fetchone()
-    version = conn.execute(
-        "SELECT body_json FROM user_profile_versions WHERE hash = ?",
-        (row["version_hash"],),
-    ).fetchone()
-    data = json.loads(version["body_json"])
-    data["about"] = body.about
-    conn.execute(
-        "UPDATE user_profile_versions SET body_json = ? WHERE hash = ?",
-        (json.dumps(data, ensure_ascii=False), row["version_hash"]),
-    )
-    conn.commit()
-    return repo.get_user_profile(conn, profile_id)
+    try:
+        result, updated = repo.update_user_profile_about(conn, profile_id, body.about)
+    except ValidationError as error:
+        raise HTTPException(
+            status_code=422, detail=error.errors(include_url=False, include_context=False)
+        ) from error
+    if result == "missing":
+        raise _missing()
+    if result == "changed":
+        raise HTTPException(status_code=409, detail="Профиль изменился во время правки")
+    return updated
 
 
 @router.put("/{profile_id}/default")
