@@ -64,6 +64,8 @@ SYSTEM = """Ты — ревьюер кода проекта. Тебе дают d
   details. Догадку без такого сценария не пиши.
 - Не советуй тест, который уже есть в этом diff.
 - line — номер строки новой версии файла из левой колонки diff.
+- Нарушение решения или инварианта из фрагментов документации — это architecture,
+  даже если оно ведёт к багу. Одну проблему не повторяй в двух разделах.
 - Архитектурное замечание обязано опираться на фрагмент: перечисли его в sources
   и сошлись в тексте как [S2]. Нет подходящего фрагмента — нет замечания.
 - Ссылайся на [Sn], только если фрагмент действительно подтверждает сказанное.
@@ -283,10 +285,17 @@ def parse_review(text: str) -> dict:
             {"file": str(i.get("file", "")), "line": i.get("line") if isinstance(i.get("line"), int) else None,
              "title": str(i.get("title", "")).strip(), "details": str(i.get("details", "")).strip(),
              "fix": str(i.get("fix", "")).strip(),
-             "sources": [str(s).strip("[] ") for s in i.get("sources") or []]}
+             "sources": _sources(i)}
             for i in items if isinstance(i, dict) and i.get("title")
         ]
     return review
+
+
+def _sources(item: dict) -> list[str]:
+    """Declared sources plus [Sn] cited in the text: models sometimes cite only there."""
+    declared = [str(s).strip("[] ") for s in item.get("sources") or []]
+    cited = re.findall(r"\[(S\d+)\]", f"{item.get('details', '')} {item.get('fix', '')}")
+    return list(dict.fromkeys(declared + cited))
 
 
 def blob(repo: str, sha: str, path: str, start=None, end=None) -> str | None:
