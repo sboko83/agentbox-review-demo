@@ -6,7 +6,7 @@ state passes between them through --work (default .ai-review):
     review.py diff   --base SHA --head SHA     changed files, numbered hunks  → diff.json
     review.py index  --base SHA                docs + code of the base commit → index.sqlite
     review.py review --model ID                retrieval + model call         → review.json, comment.md
-    review.py post   --repo OWNER/NAME --pr N  one PR comment, updated in place on every push
+    review.py post   --github-repo O/N --pr N  one PR comment, updated in place on every push
     review.py all    --base SHA --head SHA --model ID   the first three, for local runs
 """
 from __future__ import annotations
@@ -166,6 +166,8 @@ def collect_diff(base: str, head: str, repo: Path) -> dict:
             break
         text += block + "\n"
         shown.append(file["path"])
+    # Refs such as main or HEAD move; the comment and its links need the commits reviewed.
+    base, head = (git("rev-parse", ref, cwd=repo).strip() for ref in (base, head))
     return {"base": base, "head": head, "files": files, "text": text,
             "added": sum(f["added"] for f in files), "removed": sum(f["removed"] for f in files)}
 
