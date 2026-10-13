@@ -1,0 +1,8 @@
+# Day-21 indexer runtime at its verified versions. In CI torch is installed first
+# from the CPU wheel index (see the workflow), so the CUDA build is never pulled.
+torch==2.14.0
+sentence-transformers==5.1.2
+transformers==4.57.6
+tokenizers==0.22.2
+huggingface_hub==0.36.2
+numpy==2.4.3
