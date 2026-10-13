@@ -1,25 +1,29 @@
 # AI review of every pull request: diff → RAG over docs and code → LLM → one PR comment.
 # The reviewer lives in .github/ai-review; its source is week-7-task-2 of the AIAC9 course repo.
+# A push to main only builds the index: caches saved on main are visible to every PR,
+# a PR's own cache only to that PR, so main keeps the embedding model and vectors warm.
 name: AI review
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
-  group: ai-review-${{ github.event.pull_request.number }}
+  group: ai-review-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
   REVIEWER: .github/ai-review
-  BASE: ${{ github.event.pull_request.base.sha }}
+  BASE: ${{ github.event.pull_request.base.sha || github.sha }}
   HEAD: ${{ github.event.pull_request.head.sha }}
   AI_REVIEW_MODEL: ${{ vars.AI_REVIEW_MODEL || 'gpt-6-luna' }}
-  AI_REVIEW_CACHE: ${{ github.workspace }}/../ai-review-cache
+  AI_REVIEW_CACHE: ~/.cache/ai-review
 
 jobs:
   review:
@@ -28,19 +32,19 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Код PR с историей
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: .github/ai-review/requirements.txt
 
       - name: Кэш модели эмбеддингов и векторов
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ env.AI_REVIEW_CACHE }}
           key: ai-review-${{ hashFiles('.github/ai-review/index.json') }}-${{ github.run_id }}
@@ -52,17 +56,20 @@ jobs:
           pip install --quiet -r "$REVIEWER/requirements.txt"
 
       - name: 1 · Diff и изменённые файлы
+        if: github.event_name == 'pull_request'
         run: python "$REVIEWER/review.py" diff --base "$BASE" --head "$HEAD"
 
       - name: 2 · RAG-индекс документации и кода базовой ветки
         run: python "$REVIEWER/review.py" index --base "$BASE"
 
       - name: 3 · Поиск контекста и ревью моделью
+        if: github.event_name == 'pull_request'
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
         run: python "$REVIEWER/review.py" review
 
       - name: 4 · Комментарий в PR
+        if: github.event_name == 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python "$REVIEWER/review.py" post --pr "${{ github.event.pull_request.number }}"
