@@ -197,3 +197,54 @@ def test_run_session_profile_is_immutable(client):
     response = client.patch(f"/api/sessions/{session_id}", json={"user_profile_id": None})
 
     assert response.status_code == 409
+
+
+def test_patch_about_saves_a_new_version(client):
+    created = client.post("/api/user-profiles", json=profile(about="старое")).json()
+    edited = client.patch(
+        f"/api/user-profiles/{created['id']}/about", json={"about": "новое"}
+    )
+    assert edited.status_code == 200
+    assert edited.json()["profile"]["about"] == "новое"
+    assert edited.json()["version_hash"] != created["version_hash"]
+    # The old version is untouched: ledger rows written under it still resolve.
+    conn = client.app.state.db
+    assert repo.get_user_profile_version(conn, created["version_hash"]).about == "старое"
+    assert edited.json() == client.get(f"/api/user-profiles/{created['id']}").json()
+    missing = client.patch("/api/user-profiles/nope/about", json={"about": "x"})
+    assert missing.status_code == 404
+    too_long = client.patch(
+        f"/api/user-profiles/{created['id']}/about", json={"about": "x" * 501}
+    )
+    assert too_long.status_code == 422
+
+
+def test_patch_about_does_not_overwrite_a_concurrent_edit(client, monkeypatch):
+    created = client.post("/api/user-profiles", json=profile(about="старое")).json()
+    renamed = client.put(
+        f"/api/user-profiles/{created['id']}", json=profile(name="Другой", about="старое")
+    ).json()
+    # The PATCH read its snapshot before the PUT above moved the pointer.
+    monkeypatch.setattr(repo, "get_user_profile", lambda conn, profile_id: created)
+    response = client.patch(
+        f"/api/user-profiles/{created['id']}/about", json={"about": "новое"}
+    )
+    assert response.status_code == 409
+    monkeypatch.undo()
+    conn = client.app.state.db
+    current = repo.get_user_profile(conn, created["id"])
+    assert current["version_hash"] == renamed["version_hash"]
+    # The version written for the refused edit was rolled back with the pointer.
+    versions = conn.execute("SELECT COUNT(*) FROM user_profile_versions").fetchone()[0]
+    assert versions == 2
+
+
+def test_patch_about_of_a_profile_deleted_meanwhile_is_404(client, monkeypatch):
+    created = client.post("/api/user-profiles", json=profile(about="старое")).json()
+    client.delete(f"/api/user-profiles/{created['id']}")
+    # The PATCH read its snapshot before the DELETE above.
+    monkeypatch.setattr(repo, "get_user_profile", lambda conn, profile_id: created)
+    response = client.patch(
+        f"/api/user-profiles/{created['id']}/about", json={"about": "новое"}
+    )
+    assert response.status_code == 404

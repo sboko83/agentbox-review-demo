@@ -432,6 +432,42 @@ def update_user_profile(
     return get_user_profile(conn, profile_id)
 
 
+class _PointerMoved(Exception):
+    pass
+
+
+def update_user_profile_about(
+    conn: sqlite3.Connection, profile_id: str, about: str
+) -> tuple[str, dict | None]:
+    """Saves `about` as a new version. The pointer moves only if nobody moved it
+    since the read, so a concurrent PUT is never silently overwritten; on a
+    conflict the new version is rolled back with the pointer."""
+    current = get_user_profile(conn, profile_id)
+    if current is None:
+        return "missing", None
+    profile = UserProfile.model_validate({**current["profile"], "about": about})
+    try:
+        with conn:
+            digest = save_user_profile_version(conn, profile)
+            cursor = conn.execute(
+                "UPDATE user_profiles SET version_hash = ?, updated_at = ?"
+                " WHERE id = ? AND version_hash = ?",
+                (digest, _now(), profile_id, current["version_hash"]),
+            )
+            if cursor.rowcount == 0:
+                raise _PointerMoved
+            # Read before the commit: the answer is this edit, not a later PUT.
+            row = conn.execute(
+                _USER_PROFILE_SELECT + " WHERE u.id = ?", (profile_id,)
+            ).fetchone()
+    except _PointerMoved:
+        exists = conn.execute(
+            "SELECT 1 FROM user_profiles WHERE id = ?", (profile_id,)
+        ).fetchone()
+        return ("changed" if exists else "missing"), None
+    return "updated", _user_profile(row)
+
+
 def set_default_user_profile(conn: sqlite3.Connection, profile_id: str) -> dict | None:
     if get_user_profile(conn, profile_id) is None:
         return None
